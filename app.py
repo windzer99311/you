@@ -1,230 +1,113 @@
-import streamlit as st
+from flask import Flask, render_template_string
+import threading
+import time
+from datetime import datetime, timedelta
 import os
-import shutil
-from utils import (
-    validate_youtube_url, 
-    get_video_info, 
-    format_duration, 
-    format_file_size, 
-    get_available_formats,
-    download_video,
-    create_download_directory,
-    DownloadProgressHook
-)
 
-def main():
-    """Main Streamlit application."""
-    
-    # Page configuration
-    st.set_page_config(
-        page_title="YouTube Video Downloader",
-        page_icon="📹",
-        layout="wide"
-    )
-    
-    # Main title
-    st.title("📹 YouTube Video Downloader")
-    st.markdown("Download YouTube videos in various formats with real-time progress tracking.")
-    
-    # Initialize session state
-    if 'video_info' not in st.session_state:
-        st.session_state.video_info = None
-    if 'download_formats' not in st.session_state:
-        st.session_state.download_formats = []
-    if 'download_in_progress' not in st.session_state:
-        st.session_state.download_in_progress = False
-    
-    # URL input section
-    st.header("🔗 Enter YouTube URL")
-    url_input = st.text_input(
-        "YouTube URL:",
-        placeholder="https://www.youtube.com/watch?v=...",
-        help="Enter a valid YouTube video URL"
-    )
-    
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        fetch_info_btn = st.button("📋 Get Video Info", disabled=st.session_state.download_in_progress)
-    
-    with col2:
-        if url_input:
-            if validate_youtube_url(url_input):
-                st.success("✅ Valid YouTube URL")
-            else:
-                st.error("❌ Invalid YouTube URL")
-    
-    # Fetch video information
-    if fetch_info_btn and url_input:
-        if not validate_youtube_url(url_input):
-            st.error("Please enter a valid YouTube URL")
-            return
-        
-        with st.spinner("Fetching video information..."):
-            video_info = get_video_info(url_input)
-            
-            if video_info:
-                st.session_state.video_info = video_info
-                st.session_state.download_formats = get_available_formats(video_info)
-                st.success("Video information fetched successfully!")
-                st.rerun()
-            else:
-                st.error("Failed to fetch video information. Please check the URL and try again.")
-    
-    # Display video information
-    if st.session_state.video_info:
-        st.header("📺 Video Information")
-        
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            # Display thumbnail
-            if st.session_state.video_info['thumbnail']:
-                st.image(
-                    st.session_state.video_info['thumbnail'], 
-                    caption="Video Thumbnail",
-                    use_column_width=True
-                )
-        
-        with col2:
-            # Display video details
-            st.subheader(st.session_state.video_info['title'])
-            
-            info_col1, info_col2 = st.columns(2)
-            
-            with info_col1:
-                st.write(f"**📺 Channel:** {st.session_state.video_info['uploader']}")
-                st.write(f"**⏱️ Duration:** {format_duration(st.session_state.video_info['duration'])}")
-            
-            with info_col2:
-                if st.session_state.video_info['view_count']:
-                    st.write(f"**👀 Views:** {st.session_state.video_info['view_count']:,}")
-                if st.session_state.video_info['upload_date']:
-                    upload_date = st.session_state.video_info['upload_date']
-                    formatted_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
-                    st.write(f"**📅 Upload Date:** {formatted_date}")
-        
-        # Format selection and download
-        st.header("⬬ Download Options")
-        
-        if st.session_state.download_formats:
-            # Organize formats by type
-            video_formats = [f for f in st.session_state.download_formats if f['type'] == 'video']
-            audio_formats = [f for f in st.session_state.download_formats if f['type'] == 'audio']
-            
-            format_col1, format_col2 = st.columns(2)
-            
-            with format_col1:
-                st.subheader("🎥 Video Formats")
-                if video_formats:
-                    video_options = []
-                    video_format_map = {}
-                    
-                    for fmt in video_formats:
-                        quality = f"{fmt['quality']}p" if str(fmt['quality']).isdigit() else str(fmt['quality'])
-                        size_info = f" ({format_file_size(fmt['filesize'])})" if fmt['filesize'] else ""
-                        fps_info = f" {fmt['fps']}fps" if fmt['fps'] else ""
-                        option_text = f"{fmt['ext'].upper()} - {quality}{fps_info}{size_info}"
-                        video_options.append(option_text)
-                        video_format_map[option_text] = fmt['format_id']
-                    
-                    selected_video = st.selectbox(
-                        "Choose video format:",
-                        options=video_options,
-                        index=0,
-                        disabled=st.session_state.download_in_progress
-                    )
-                    
-                    if st.button("📥 Download Video", disabled=st.session_state.download_in_progress):
-                        download_format(url_input, video_format_map[selected_video], "video")
-                else:
-                    st.info("No video formats available")
-            
-            with format_col2:
-                st.subheader("🎵 Audio Formats")
-                if audio_formats:
-                    audio_options = []
-                    audio_format_map = {}
-                    
-                    for fmt in audio_formats:
-                        quality = f"{fmt['quality']} kbps" if str(fmt['quality']).isdigit() else str(fmt['quality'])
-                        size_info = f" ({format_file_size(fmt['filesize'])})" if fmt['filesize'] else ""
-                        option_text = f"{fmt['ext'].upper()} - {quality}{size_info}"
-                        audio_options.append(option_text)
-                        audio_format_map[option_text] = fmt['format_id']
-                    
-                    selected_audio = st.selectbox(
-                        "Choose audio format:",
-                        options=audio_options,
-                        index=0,
-                        disabled=st.session_state.download_in_progress
-                    )
-                    
-                    if st.button("📥 Download Audio", disabled=st.session_state.download_in_progress):
-                        download_format(url_input, audio_format_map[selected_audio], "audio")
-                else:
-                    st.info("No audio formats available")
-        else:
-            st.warning("No download formats found for this video")
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import WebDriverException
+from webdriver_manager.chrome import ChromeDriverManager
 
-def download_format(url: str, format_id: str, download_type: str):
-    """Handle the download process with progress tracking."""
-    
-    st.session_state.download_in_progress = True
-    
-    # Create download directory
-    download_dir = create_download_directory()
-    
-    try:
-        st.subheader(f"📥 Downloading {download_type.title()}...")
-        
-        # Progress tracking
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Create progress hook
-        progress_hook = DownloadProgressHook(progress_bar, status_text)
-        
-        # Download the video
-        success, result = download_video(url, format_id, download_dir, progress_hook)
-        
-        if success:
-            st.success("✅ Download completed successfully!")
-            
-            # Provide download link
-            if os.path.exists(result):
-                filename = os.path.basename(result)
-                file_size = os.path.getsize(result)
-                
-                st.info(f"📁 **File:** {filename}")
-                st.info(f"📊 **Size:** {format_file_size(file_size)}")
-                
-                # Read file and provide download button
-                with open(result, 'rb') as file:
-                    file_data = file.read()
-                    
-                st.download_button(
-                    label="💾 Download File",
-                    data=file_data,
-                    file_name=filename,
-                    mime="application/octet-stream"
-                )
-            else:
-                st.warning("File downloaded but could not be located for download link")
-        else:
-            st.error(f"❌ Download failed: {result}")
-    
-    except Exception as e:
-        st.error(f"❌ An error occurred during download: {str(e)}")
-    
-    finally:
-        # Clean up temporary directory
+app = Flask(__name__)
+
+VIRTUAL_START_STR = "2025-06-13 00:00:00"
+VIRTUAL_START = datetime.strptime(VIRTUAL_START_STR, "%Y-%m-%d %H:%M:%S")
+BOOT_TIME_FILE = "boot_time.txt"
+LOG_FILE = "logs.txt"
+
+# Initialize or load boot time
+if os.path.exists(BOOT_TIME_FILE):
+    with open(BOOT_TIME_FILE, "r", encoding='utf-8') as f:
+        REAL_SERVER_START = datetime.strptime(f.read().strip(), "%Y-%m-%d %H:%M:%S")
+else:
+    REAL_SERVER_START = datetime.now()
+    with open(BOOT_TIME_FILE, "w", encoding='utf-8') as f:
+        f.write(REAL_SERVER_START.strftime("%Y-%m-%d %H:%M:%S"))
+
+# Background visiting logic
+def wake_web():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+
+    while True:
+        log_lines = []
+        now_str = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+
         try:
-            shutil.rmtree(download_dir)
-        except:
-            pass
-        
-        st.session_state.download_in_progress = False
+            with open("weblist.txt", "r", encoding="utf-8") as f:
+                urls = [line.strip() for line in f if line.strip()]
+                for url in urls:
+                    try:
+                        driver.get(url)
+                        log_line = f"{now_str} ✅ {url} → 200"
+                    except WebDriverException as e:
+                        log_line = f"{now_str} ❌ {url} → Error: {e}"
+                    print(log_line)
+                    log_lines.append(log_line)
+        except FileNotFoundError:
+            log_lines.append(f"{now_str} ❌ weblist.txt not found.")
+
+        if log_lines:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                for line in log_lines:
+                    f.write(line + "\n")
+
+        time.sleep(30)
+
+# Start background thread
+if not os.path.exists("wake_thread.lock"):
+    open("wake_thread.lock", "w").close()
+    threading.Thread(target=wake_web, daemon=True).start()
+
+# Flask route
+@app.route("/")
+def home():
+    elapsed_real = (datetime.now() - REAL_SERVER_START).total_seconds()
+    current_virtual = VIRTUAL_START + timedelta(seconds=elapsed_real)
+
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()[-100:]
+    else:
+        lines = []
+
+    html = f"""
+    <html>
+    <head>
+        <title>Wake Web Flask</title>
+        <style>
+            .log-box {{
+                height: 400px;
+                overflow-y: auto;
+                background: #f9f9f9;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                font-family: monospace;
+                white-space: pre-wrap;
+                color: #000;
+            }}
+        </style>
+    </head>
+    <body>
+        <h1>Wake Web Flask</h1>
+        <h3>Time running since:</h3>
+        <pre>{current_virtual.strftime("%Y-%m-%d %H:%M:%S")}</pre>
+        <h3>Request Log</h3>
+        <div class="log-box">
+            {"<br>".join(line.strip() for line in lines)}
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html)
 
 if __name__ == "__main__":
-    main()
+    app.run(debug=True, port=5000)
