@@ -1,0 +1,1 @@
+fro wsgi import app
