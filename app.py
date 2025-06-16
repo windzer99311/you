@@ -109,5 +109,3 @@ def home():
     """
     return render_template_string(html)
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
